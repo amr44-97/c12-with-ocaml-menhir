@@ -1,0 +1,9 @@
+(ocamllex lexer)
+(menhir (modules parser))
+
+
+(library
+ (name cortex)
+(preprocess (pps ppx_deriving.show))
+ (modules parser lexer ast transpiler))
+

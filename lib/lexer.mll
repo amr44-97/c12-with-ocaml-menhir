@@ -1,0 +1,185 @@
+{
+  open Lexing
+  open Parser (* Get the token types from Menhir *)
+  open Option
+  (* open Context  *)
+  exception Error of string
+  let string_buf = Buffer.create 256
+
+    let init _filename channel : Lexing.lexbuf = 
+        Lexing.from_channel channel
+
+    let saw_type_decl = ref false
+
+    (* 1. The Symbol Table *)
+    (* Maps "string" -> token type (TYPE_NAME or IDENTIFIER) *)
+    let symbol_table : (string, token) Hashtbl.t = Hashtbl.create 64
+    
+    (* Helper to register a new type *)
+    let register_type name = 
+        Hashtbl.add symbol_table name (TYPE_NAME name)
+
+    (* Helper to lookup an identifier *)
+    (* If it exists in the table, it's a TYPE_NAME. Otherwise, it's an IDENTIFIER. *)
+    let lookup_ident name =
+      try Hashtbl.find symbol_table name
+      with Not_found -> IDENTIFIER name
+}
+
+let white = [' ' '\t']+
+let digit = ['0'-'9']
+let characters = ['_' 'a'-'z' 'A'-'Z']
+let identifier = characters (characters|digit)*
+
+(* Integer constants *)
+let nonzero_digit = ['1'-'9']
+let decimal_constant = nonzero_digit digit*
+
+(* Floating constants *)
+let sign = ['-' '+']
+let digit_sequence = digit+
+
+(* Character and string constants *)
+let simple_escape_sequence =
+  '\\' ['\''  '\"'  '?'  '\\'  'a'  'b'  'f'  'n'  'r'  't'  'v']
+
+let escape_sequence =
+    simple_escape_sequence
+
+rule read = parse
+  | white { read lexbuf } (* Skip whitespace *)
+  | '\n'  { new_line lexbuf; read lexbuf }
+  | "/*"  { multiline_comment lexbuf; read lexbuf }
+  | "//"  { singleline_comment lexbuf; read lexbuf }
+  | '+'   { PLUS }
+  | '-'   { MINUS }
+  | '*'   { MUL }
+  | '/'   { DIV }
+  | '%'   { MOD }
+  | "+="  { ADD_ASSIGN }
+  | "-="  { SUB_ASSIGN }
+  | "*="  { MUL_ASSIGN }
+  | "/="  { DIV_ASSIGN }
+  | "%="  { MOD_ASSIGN }
+  | "|="  { OR_ASSIGN  }
+  | "&="  { AND_ASSIGN }
+  | "^="  { XOR_ASSIGN }
+  | "<<=" { SHL_ASSIGN }
+  | ">>=" { SHR_ASSIGN }
+  | "<<"  { SHL }
+  | ">>"  { SHR }
+  | '='   { EQUAL }
+  | "=="  { EQUAL_EQUAL }
+  | "!="  { NOT_EQUAL }
+  | "<="  { LESS_OR_EQUAL }
+  | ">="  { GREATER_OR_EQUAL }
+  | "="   { EQUAL }
+  | "<"   { LESS_THAN }
+  | ">"   { GREATER_THAN }
+  | "++"  { INCREMENT }
+  | "--"  { DECREMENT }
+  | "!"   { BANG }
+  | "&&"  { AMPERSAND2 }
+  | "||"  { PIPE_PIPE }
+  | "&"   { AMPERSAND }
+  | "|"   { PIPE }
+  | "^"   { CARET }
+  | "?"   { QUESTION_MARK }
+  | ":"   { COLON }
+  | "~"   { TILDE }
+  | '('   { LPAREN }
+  | ')'   { RPAREN }
+  | '{'   { LBRACE }
+  | '}'   { RBRACE }
+  | '['   { LBRACKET }
+  | ']'   { RBRACKET }
+  | ';'   { SEMICOLON }
+  | ','   { COMMA }
+  | ','   { DOT }
+  | ".."  { ELLIPSIS2 }
+  | "..." { ELLIPSIS3 }
+  | "=>" { ARROW }
+  | "let" { LET }
+  | "impl" { IMPL }
+  | "true" { TRUE }
+  | "false" { FALSE }
+  | "bool" { BOOL }
+  | "const"   { CONST }
+  | "auto"    { AUTO }
+  | "break"   { BREAK }
+  | "char"    { CHAR }
+  | "continue"{ CONTINUE }
+  | "do"      { DO }
+  | "double"  { DOUBLE }
+  | "else"    { ELSE }
+  | "extern"  { EXTERN }
+  | "float"   { FLOAT }
+  | "for"     { FOR }
+  | "goto"    { GOTO }
+  | "if"      { IF }
+  | "inline"  { INLINE }
+  | "int"     { INT }
+  | "long"    { LONG }
+  | "return"  { RETURN }
+  | "short"   { SHORT }
+  | "signed"  { SIGNED }
+  | "sizeof"  { SIZEOF }
+  | "static"  { STATIC }
+  | "enum"    { saw_type_decl := true; ENUM }
+  | "struct"  { saw_type_decl := true; STRUCT }
+  | "union"   { saw_type_decl := true; UNION }
+  | "switch"  { SWITCH }
+  | "typedef" { TYPEDEF }
+  | "unsigned"{ UNSIGNED }
+  | "void"    { VOID }
+  | "defer"  { DEFER }
+  | "as"     { AS }
+  | "macro"  { MACRO }
+  | "include" { INCLUDE }
+  (* | "volatile"                    { VOLATILE } *)
+  | "while"                       { WHILE }
+  | digit+ as i { NUMBER_LITERAL (int_of_string i) }
+  | identifier as id   { 
+      if !saw_type_decl then begin
+          register_type id;
+          saw_type_decl := false;
+          TYPE_NAME id
+      end
+      else begin 
+          lookup_ident id    (* Check if it was registered before *)
+      (* IDENTIFIER id *)
+      end
+  }
+  |  "'"  { char lexbuf; char_literal_end lexbuf  ; CHAR_LITERAL (lexeme lexbuf) }
+  | "\""  { string_literal lexbuf ; STRING_LITERAL (lexeme lexbuf)}
+  | eof   { EOF }
+  | _     { failwith ("Unexpected char: " ^ Lexing.lexeme lexbuf) }
+
+
+and char = parse
+  | simple_escape_sequence        { }
+  | '\\' _                        { failwith "incorrect escape sequence" }
+  | _                             { }
+
+and char_literal_end = parse
+  | '\''       { }
+  | '\n' | eof { failwith "missing terminating \"'\" character" }
+  | ""         { char lexbuf; char_literal_end lexbuf }
+
+and string_literal = parse
+  | '\"'       { }
+  | '\n' | eof { failwith "missing terminating '\"' character" }
+  | ""         { char lexbuf; string_literal lexbuf }
+
+(* Multi-line comment terminated by "*/" *)
+and multiline_comment = parse
+  | "*/"   { () }
+  | eof    { failwith "unterminated comment" }
+  | '\n'   { new_line lexbuf; multiline_comment lexbuf }
+  | _      { multiline_comment lexbuf }
+
+(* Single-line comment terminated by a newline *)
+and singleline_comment = parse
+  | '\n'   { new_line lexbuf }
+  | eof    { () }
+  | _      { singleline_comment lexbuf }
