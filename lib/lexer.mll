@@ -8,22 +8,6 @@
 
     let init _filename channel : Lexing.lexbuf = 
         Lexing.from_channel channel
-
-    let saw_type_decl = ref false
-
-    (* 1. The Symbol Table *)
-    (* Maps "string" -> token type (TYPE_NAME or IDENTIFIER) *)
-    let symbol_table : (string, token) Hashtbl.t = Hashtbl.create 64
-    
-    (* Helper to register a new type *)
-    let register_type name = 
-        Hashtbl.add symbol_table name (TYPE_NAME name)
-
-    (* Helper to lookup an identifier *)
-    (* If it exists in the table, it's a TYPE_NAME. Otherwise, it's an IDENTIFIER. *)
-    let lookup_ident name =
-      try Hashtbl.find symbol_table name
-      with Not_found -> IDENTIFIER name
 }
 
 let white = [' ' '\t']+
@@ -95,7 +79,7 @@ rule read = parse
   | ']'   { RBRACKET }
   | ';'   { SEMICOLON }
   | ','   { COMMA }
-  | ','   { DOT }
+  | '.'   { DOT }
   | ".."  { ELLIPSIS2 }
   | "..." { ELLIPSIS3 }
   | "=>" { ARROW }
@@ -125,9 +109,9 @@ rule read = parse
   | "signed"  { SIGNED }
   | "sizeof"  { SIZEOF }
   | "static"  { STATIC }
-  | "enum"    { saw_type_decl := true; ENUM }
-  | "struct"  { saw_type_decl := true; STRUCT }
-  | "union"   { saw_type_decl := true; UNION }
+  | "enum"    { ENUM }
+  | "struct"  { STRUCT }
+  | "union"   { UNION }
   | "switch"  { SWITCH }
   | "typedef" { TYPEDEF }
   | "unsigned"{ UNSIGNED }
@@ -139,17 +123,7 @@ rule read = parse
   (* | "volatile"                    { VOLATILE } *)
   | "while"                       { WHILE }
   | digit+ as i { NUMBER_LITERAL (int_of_string i) }
-  | identifier as id   { 
-      if !saw_type_decl then begin
-          register_type id;
-          saw_type_decl := false;
-          TYPE_NAME id
-      end
-      else begin 
-          lookup_ident id    (* Check if it was registered before *)
-      (* IDENTIFIER id *)
-      end
-  }
+  | identifier as id   { IDENTIFIER id }
   |  "'"  { char lexbuf; char_literal_end lexbuf  ; CHAR_LITERAL (lexeme lexbuf) }
   | "\""  { string_literal lexbuf ; STRING_LITERAL (lexeme lexbuf)}
   | eof   { EOF }
