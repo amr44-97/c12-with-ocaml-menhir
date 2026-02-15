@@ -1,5 +1,10 @@
 %{
   open Ast
+  open Printf
+
+    (* Helper to raise it using the current location *)
+    let fail_syntax msg start_pos end_pos =
+        raise (Error_Message (msg, start_pos ,end_pos ))
 %}
 
 /* Tokens (The vocabulary) */
@@ -7,7 +12,6 @@
 %token <string> IDENTIFIER
 %token <string> CHAR_LITERAL 
 %token <string> STRING_LITERAL 
-%token <string> TYPE_NAME
 %token TRUE FALSE NULL
 %token PLUS MINUS MUL DIV MOD SHL SHR EQUAL
 %token ADD_ASSIGN
@@ -79,18 +83,53 @@ top_level:
   
   (* | STRUCT; name = IDENTIFIER; LBRACE; fields = separated_list(COMMA,struct_field); RBRACE  *)
   (*   { StructDef(name, fields) } *)
-  (*  *)
-  (* | STRUCT; name = IDENTIFIER; LBRACE; fields = separated_list(COMMA,struct_field); option(COMMA);RBRACE  *)
+
+  | STRUCT; name = IDENTIFIER; LBRACE; fields = list(struct_field); RBRACE; 
+      { StructDef(name, fields) }
+  (* | STRUCT; name = IDENTIFIER; LBRACE; fields = separated_list(COMMA,struct_field); option(COMMA); RBRACE  *)
   (*   { StructDef(name, fields) } *)
-  
+  (*  *)
+  (* | STRUCT; name = IDENTIFIER; LBRACE; fields = list(struct_field); COMMA; RBRACE  *)
+  (*   { StructDef(name, fields) } *)
+
   | ENUM; name = IDENTIFIER; LBRACE; variants = separated_list(COMMA, IDENTIFIER); RBRACE 
     { EnumDef(name, variants) }
 
   | UNION; name = IDENTIFIER; enum_tag = option(IDENTIFIER) ;LBRACE; variants = separated_list(COMMA, IDENTIFIER); RBRACE 
     { UnionDef(name, enum_tag, variants) }
 
-  | INCLUDE; path = IDENTIFIER ; alias = option(preceded(AS, IDENTIFIER)); SEMICOLON
-    { Include(path, alias) }
+  | INCLUDE; include_data = import_path ; alias = option(preceded(AS, IDENTIFIER)); SEMICOLON
+    {   
+        let (path, is_wildcard) = include_data in
+        Include(path, alias, is_wildcard)
+    }
+
+
+include_stmt:
+  | path =  separated_nonempty_list(DOT, IDENTIFIER) { (path,false) }
+  | path =  separated_nonempty_list(DOT, IDENTIFIER); DOT; MUL { (path,true) }
+
+import_path:
+  (* /* Case 1: End of path "io" */ *)
+  | id = IDENTIFIER 
+    { ([id], false) }
+
+  (* /* Case 2: Wildcard "io.*" */ *)
+  | id = IDENTIFIER; DOT; MUL 
+    { ([id], true) }
+
+  | id = IDENTIFIER; DOT 
+    { 
+        let msg = sprintf "expected Identifier or wildcard after module name `%s`" id in 
+        fail_syntax msg $startpos $endpos
+    }
+  (* /* Case 3: Recursion "std. ..." */ *)
+  | id = IDENTIFIER; DOT; rest = import_path 
+    { 
+      let (tail, is_wildcard) = rest in
+      (id :: tail, is_wildcard) 
+    }
+
 
 
 (* /* --- Function Parameters --- */ *)
@@ -99,9 +138,42 @@ param:
 
 (* /* --- Struct Fields --- */ *)
 struct_field:
-  | t = typ; name = IDENTIFIER (* option(preceded(EQUAL,expr)) *) { (name, t) }
+  | t = typ; name = IDENTIFIER; expr = option(preceded(EQUAL,expr)); SEMICOLON { (name, t, expr) }
+
+(* /* A list of fields that allows an optional trailing comma */ *)
+struct_fields:
+  |  { [] }
+  | f = struct_field 
+      { [f] }
+  | f = struct_field; COMMA; tail = struct_fields 
+      { f :: tail }
+
+(*  Helper: "x" or "x = 5"  *)
+struct_decl_item:
+  | name = IDENTIFIER; init = option(preceded(EQUAL, expr)) 
+    { (name, init) }
+
+(*  Helper: "float x, y = 5"  *)
+struct_decl_line:
+  | t = typ; items = separated_nonempty_list(COMMA, struct_decl_item)
+    { List.map (fun (n, i) -> (n, t, i)) items }
+
+(* Helper: The whole body "float x, y, int z," *)
+struct_body:
+  |  { [] }
+  | line = struct_decl_line 
+      { line }
+  | line = struct_decl_line; COMMA; tail = struct_body 
+      { line @ tail }
+
+
 
 (*  --- Types ---  *)
+  (* | TYPE    { TType } /* Generic 'type T' */ *)
+  (* /* Pointers: int* */ *)
+  (* /* Optionals: int? */ *)
+  (* /* Arrays: int[] or int[10..n] */ *)
+  (* /* Slice: int[0..] or int[0..n] */ *)
 typ:
   | INT    { TInt }
   | FLOAT  { TFloat }
@@ -111,16 +183,24 @@ typ:
   | CHAR   { TChar }
   | BOOL   { TBool }
   | VOID   { TVoid }
-  (* | TYPE    { TType } /* Generic 'type T' */ *)
-  | name = TYPE_NAME { TNamed name }
-  (* /* Pointers: int* */ *)
-  | t = typ; MUL { TPtr t }
-  (* /* Optionals: int? */ *)
-  | t = typ; QUESTION_MARK { TOptional t }
-  (* /* Arrays: int[] or int[10..n] */ *)
-  | t = typ; LBRACKET; size = option(NUMBER_LITERAL); RBRACKET { TArray(t, size) }
-  (* /* Slice: int[0..] or int[0..n] */ *)
-  | t = typ; LBRACKET; size = option(NUMBER_LITERAL); option(ELLIPSIS2); option(NUMBER_LITERAL) ; RBRACKET { TSlice(t, size) }
+  
+  (* | name = IDENTIFIER  *)
+  (*   { TNamed name } *)
+  
+  | path = separated_nonempty_list(DOT, IDENTIFIER)  
+    { TNamed(path) }
+  
+  | t = typ; MUL 
+    { TPtr t }
+  
+  | t = typ; QUESTION_MARK 
+    { TOptional t }
+  
+  | t = typ; LBRACKET; size = option(NUMBER_LITERAL); RBRACKET 
+    { TArray(t, size) }
+  
+  | t = typ; LBRACKET; size = option(NUMBER_LITERAL); option(ELLIPSIS2); option(NUMBER_LITERAL) ; RBRACKET 
+    { TSlice(t, size) }
 
 
 (*  --- Statements --- */ *)
@@ -195,6 +275,16 @@ block_or_stmt:
 
   (* | i = NUMBER_LITERAL { Int i } *)
   (* | x = IDENTIFIER  { Variable x } *)
+ident_expr:
+  | name = IDENTIFIER    { Identifier name } 
+  | e = expr; DOT; field = IDENTIFIER   { Member(e, field) }
+
+
+  (* /* Binary Ops */ *)
+  (* /* Function Call: foo(1, 2) */ *)
+  (*  Access: obj.field or obj->field  *)
+  (*  Casting: (int) x  *)
+  (*  Sizeof  *)
 expr:
   | LPAREN; e = expr; RPAREN { e }
   | i = NUMBER_LITERAL     { NumberLiteral i }
@@ -203,9 +293,7 @@ expr:
   | TRUE            { BoolLiteral true }
   | FALSE           { BoolLiteral false }
   | NULL            { Null }
-  | name = IDENTIFIER       { Identifier name }
-
-  (* /* Binary Ops */ *)
+  | name = IDENTIFIER    { Identifier name } 
   | e1 = expr; PLUS;  e2 = expr { BinOp(e1, Add, e2) }
   | e1 = expr; MINUS; e2 = expr { BinOp(e1, Sub, e2) }
   | e1 = expr; MUL; e2 = expr { BinOp(e1, Mul, e2) }
@@ -220,19 +308,19 @@ expr:
   | TILDE; e1 = expr  { UnaryOp(Bit_Not,e1)}
   | MINUS; e1 = expr;  { UnaryOp(Negation,e1)}
   | AMPERSAND; e1 = expr;  { UnaryOp(Address_Of,e1)}
+  
   | MUL; e1 = expr;  { UnaryOp(Deref,e1)}
+  
   | BANG; e1 = expr;  { UnaryOp(Bool_Not,e1)}
-  (* /* Function Call: foo(1, 2) */ *)
-  | name = IDENTIFIER; LPAREN; args = separated_list(COMMA, expr); RPAREN
+
+  | name = expr; LPAREN; args = separated_list(COMMA, expr); RPAREN
     { Call(name, args) }
 
-  (* /* Access: obj.field or obj->field */ *)
-  | e = expr; DOT; field = IDENTIFIER   { Member(e, field) }
-  (* | e = expr; ARROW; field = IDENTIFIER { UnaryOp(Deref, Member(e, field)) } /* Sugar */ *)
+  | e = expr; DOT; field = IDENTIFIER   
+  { Member(e, field) }
 
-  (* /* Casting: (int) x */ *)
   | LPAREN; t = typ; RPAREN; e = expr %prec TYPE_CAST
     { Cast(t, e) }
     
-  (* /* Sizeof */ *)
   | SIZEOF; LPAREN; t = typ; RPAREN { SizeOf t }
+
