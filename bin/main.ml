@@ -25,42 +25,57 @@ try
     (* A. Read File *)
     let source_code = read_file filename in
     let lexbuf = Lexing.from_string source_code in
-    
-    (* B. Lex Everything (Buffered Strategy) *)
-    (* This runs your Lexer logic (flags/tables) completely first *)
-    (* let all_tokens = lex_all_tokens lexbuf in *)
-    
-    (* Optional: Debug Print Tokens *)
-    (* List.iter (fun t -> printf "%s " (Parser.token_to_string t)) all_tokens; 
-    printf "\n\n"; 
-    *)
+    (* Set the filename in lexbuf so positions are correct 
+      lexbuf is mutable of type position *)
+    lexbuf.lex_curr_p <- { lexbuf.lex_curr_p with pos_fname = filename };
 
-    (* C. Create a Token Provider for Menhir *)
-    (* Menhir needs a function () -> token, so we make one that pops from our list *)
-    (* let token_list_ref = ref all_tokens in *)
-    (* let token_provider _lexbuf = *)
-    (*   match !token_list_ref with *)
-    (*   | [] -> Parser.EOF *)
-    (*   | t :: rest ->  *)
-    (*       token_list_ref := rest;  *)
-    (*       t *)
-    (* in *)
-
-    (* D. Parse *)
     (* We pass 'lexbuf' only for error position reporting *)
     let ast = Parser.program (* token_provider *) Lexer.read lexbuf in
-
     (* E. Print AST (using ppx_deriving.show) *)
     print_endline "--- Abstract Syntax Tree ---";
-    print_endline (Ast.show_program ast)
-
-  with
+    print_endline (Ast.show_program ast) 
+  
+with
   | Sys_error msg -> 
       eprintf "Error opening file: %s\n" msg
   | Lexer.Error msg ->
-      eprintf "Lexer Error: %s\n" msg
-  | Parser.Error ->
-      eprintf "Parser Error: Syntax error. \n" 
+    let source_code = read_file filename in
+    let lexbuf = Lexing.from_string source_code in
+      (* eprintf "Lexer Error: %s\n" msg *)
+    Diagnostic.print_error filename source_code lexbuf ("Lexer Error: " ^ msg)
+  (* | Parser.Error -> *)
+  (*   let source_code = read_file filename in *)
+  (*   let lexbuf = Lexing.from_string source_code in *)
+  (*   Diagnostic.print_error filename source_code lexbuf "Syntax Error" *)
   | Failure msg ->
       eprintf "Error: %s\n" msg
+
+  (* Catch your CUSTOM error *)
+  | Ast.Error_Message (msg, start_pos, end_pos) ->
+    let source = read_file filename in
+    let lexbuf = Lexing.from_string source in
+       (* We construct a temporary lexbuf at the right pos to trick the printer, 
+          or update your print_diagnostic to take positions directly.
+          For simplicity, let's just use the start_pos. *)
+       lexbuf.lex_curr_p <- start_pos;
+       Diagnostic.print_diagnostic
+         Diagnostic.Syntax_Error 
+         Diagnostic.Error 
+         msg 
+         lexbuf 
+         source
+  (* Catch the GENERIC error (fallback) *)
+  | Parser.Error ->
+    let source = read_file filename in
+    let lexbuf = Lexing.from_string source in
+       Diagnostic.print_diagnostic 
+         Diagnostic.Syntax_Error 
+         Diagnostic.Error 
+         "Syntax Error (Expression expected or illegal character)" 
+         lexbuf 
+         source
+
+
+
+
 
