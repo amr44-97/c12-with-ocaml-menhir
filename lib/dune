@@ -5,5 +5,5 @@
 (library
  (name cortex)
 (preprocess (pps ppx_deriving.show))
- (modules parser lexer ast transpiler))
+ (modules parser lexer ast transpiler diagnostic))
 
