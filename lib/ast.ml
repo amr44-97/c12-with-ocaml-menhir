@@ -1,6 +1,7 @@
 (* No .mli needed for AST usually, as it's just types *)
 (* 1. Binary Operators *)
 
+exception Error_Message of string * Lexing.position * Lexing.position
 
 type binop = 
   | Add | Sub | Mul | Div | Mod
@@ -28,7 +29,8 @@ type typ =
   | TBool                   (* bool *)
   | TVoid                   (* void *)
   | TType                   (* type (for generics) *)
-  | TNamed of string        (* struct/enum names or generic T *)
+ (*  | TNamed of string *)        (* struct/enum names or generic T *)
+  | TNamed of string list       (* struct/enum names or generic T *)
   | TPtr of typ             (* T* *)
   | TOptional of typ        (* T? *)
   | TArray of typ * int option (* T[] or T[10] *)
@@ -37,6 +39,7 @@ type typ =
 
 
 (* 4. Expressions *)
+
 type expr =
   | Variable of string
   | Identifier of string
@@ -49,7 +52,7 @@ type expr =
   | Id of string
   | BinOp of expr * binop * expr
   | UnaryOp of unaryop * expr
-  | Call of string * expr list        (* func(a, b) *)
+  | Call of  expr * expr list        (* func(a, b) *)
   | Member of expr * string           (* obj.field *)
   | Cast of typ * expr                (* (int) x *)
   | SizeOf of typ                     (* sizeof(int) *)
@@ -57,6 +60,11 @@ type expr =
   | StructInit of string * (string * expr) list (* Point { .x = 1, .y = 2 } *)
   | Switch of expr * (expr list * stmt list) list * stmt list option 
     (* switch(x) { 1,2 => { ... }, else => { ... } } *)
+[@@deriving show]
+
+and id_expr = 
+  | Identifier of string
+  | Member of expr * string           (* obj.field *)
 [@@deriving show]
 
 (* 5. Statements *)
@@ -94,13 +102,13 @@ type func_param = { p_type: typ; p_name: string }
 type top_level =
   | FuncDef of typ * string * func_param list  * stmt (* int add(...) { } *)
   | FuncProto of typ * string * func_param list      (*int add();*)
-  | StructDef of string * (string * typ) list        (* struct P { int x; }; *)
+  | StructDef of string * (string * typ * expr option) list        (* struct P { int x; }; *)
   | StructDecl of string                             (* struct P ; *)
   | EnumDef of string * string list                  (* enum Color { Red }; *)
   | UnionDef of string * string option * string list                  (* enum Color { Red }; *)
   | DistinctDef of string * typ                      (* distinct Id = int; *)
   | GlobalDecl of typ * string * expr option         (* int global = 10; *)
-  | Include of string * string option                 (* include "io" as io; *)
+  | Include of string list * string option * bool           (* include "io" as io; *)
   | MacroDef of string * string list * stmt          (* macro m(args) { ... } *)
 [@@deriving show]
 
