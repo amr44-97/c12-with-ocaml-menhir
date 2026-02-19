@@ -25,55 +25,67 @@ try
     (* A. Read File *)
     let source_code = read_file filename in
     let lexbuf = Lexing.from_string source_code in
+    Diagnostic.current_source := source_code;
     (* Set the filename in lexbuf so positions are correct 
       lexbuf is mutable of type position *)
     lexbuf.lex_curr_p <- { lexbuf.lex_curr_p with pos_fname = filename };
 
     (* We pass 'lexbuf' only for error position reporting *)
     let ast = Parser.program (* token_provider *) Lexer.read lexbuf in
-    (* E. Print AST (using ppx_deriving.show) *)
-    print_endline "--- Abstract Syntax Tree ---";
-    print_endline (Ast.show_program ast) 
-  
-with
-  | Sys_error msg -> 
-      eprintf "Error opening file: %s\n" msg
-  | Lexer.Error msg ->
-    let source_code = read_file filename in
-    let lexbuf = Lexing.from_string source_code in
-      (* eprintf "Lexer Error: %s\n" msg *)
-    Diagnostic.print_error filename source_code lexbuf ("Lexer Error: " ^ msg)
-  (* | Parser.Error -> *)
-  (*   let source_code = read_file filename in *)
-  (*   let lexbuf = Lexing.from_string source_code in *)
-  (*   Diagnostic.print_error filename source_code lexbuf "Syntax Error" *)
-  | Failure msg ->
-      eprintf "Error: %s\n" msg
+    Diagnostic.report_all_warnings source_code;
 
-  (* Catch your CUSTOM error *)
-  | Ast.Error_Message (msg, start_pos, end_pos) ->
+    (* E. Print AST (using ppx_deriving.show) *)
+    
+    (* print_endline "--- Abstract Syntax Tree ---"; *)
+    (* print_endline (Ast.show_program ast);  *)
+ 
+    let c_code = Codegen.generate ast in
+    (* 2. Print or Save It *)
+    print_endline "--- Generated C Code ---";
+    (* print_endline c_code; *)
+
+    (* Optional: Save to file *)
+    let out_chan = open_out "output.c" in
+    output_string out_chan c_code;
+    close_out out_chan;
+    printf "\n[Success] Wrote output to output.c\n" 
+
+with
+    | Sys_error msg -> 
+      eprintf "Error opening file: %s\n" msg
+    | Failure msg ->
+      eprintf "Error: %s\n" msg
+    | Lexer.Error msg ->
     let source = read_file filename in
     let lexbuf = Lexing.from_string source in
-       (* We construct a temporary lexbuf at the right pos to trick the printer, 
-          or update your print_diagnostic to take positions directly.
-          For simplicity, let's just use the start_pos. *)
-       lexbuf.lex_curr_p <- start_pos;
-       Diagnostic.print_diagnostic
-         Diagnostic.Syntax_Error 
-         Diagnostic.Error 
-         msg 
-         lexbuf 
-         source
-  (* Catch the GENERIC error (fallback) *)
-  | Parser.Error ->
+      Diagnostic.print_diagnostic
+        Diagnostic.Lexical_Error
+        Diagnostic.Error
+        msg
+        lexbuf.lex_curr_p (* Pass position directly *)
+        source
+
+    | Ast.Error_Message (msg, start_pos, _) ->
+        let source = read_file filename in
+      Diagnostic.print_diagnostic 
+        Diagnostic.Syntax_Error 
+        Diagnostic.Error 
+        msg 
+        start_pos (* Pass the saved position *)
+        source
+
+    | Parser.Error ->
     let source = read_file filename in
     let lexbuf = Lexing.from_string source in
-       Diagnostic.print_diagnostic 
-         Diagnostic.Syntax_Error 
-         Diagnostic.Error 
-         "Syntax Error (Expression expected or illegal character)" 
-         lexbuf 
-         source
+      Diagnostic.print_diagnostic
+        Diagnostic.Syntax_Error
+        Diagnostic.Error
+        "Unexpected token"
+        lexbuf.lex_curr_p
+        source
+
+
+
 
 
 

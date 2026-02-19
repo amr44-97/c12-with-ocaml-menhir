@@ -1,22 +1,58 @@
-include std.mem;
-include std.io.*;
+#include "base" as b;
+#include "cstdio";
+
+macro alloc(type T, size_t n = 1) {
+    (T*) c.malloc(sizeof(T) * n);
+}
 
 struct T;
 
 struct Vec3f { 
     float x=1;
     float y=1;
-    int A =1;
+    float z=1;
+}
+struct Pos { 
+    float x=1;
+    float y=1;
+    float z=1;
+}
+
+impl Pos,Vec3f {
+
+    float[] to_array(&Self) {
+        return {Self.x, Self.y, Self.z};
+    }
+
+
 }
 
 
-char* read_file(char* file_name) {
-    int[] buffer;
-    return printf(file_name);
+int read_file(char* file_name) {
+    int buffer;
+    //defer { 
+	//	free(buffer); 
+	//}
+	
+    return c.printf("%s",file_name);
 }
 
 
-int main(int argc, char* argv) {
+
+int main(int argc, char*[] argv) {
 	let x = 10;
+    let a1: []int = {1,2,3,4,5,6,7,8};
+    let a2 = a1[0..];
+    let a3 = &a1[0..5]; // type: slice<int>
+    let a3 = (int*)&a1[0]; // type: int* , only points to the 0ths element and cannot do ptr
+                           // arithmatic
+
+    if((a3++).*) { // Error: illegal pointer arithmatic 
+                   // or legal since the rvalue we are referencing to is not mutable
+
+    }
+
+    println("Hello from {}","Amr");
+    read_file("Hello from C from Ocaml\n");
 }
 

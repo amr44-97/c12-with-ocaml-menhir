@@ -4,7 +4,7 @@
   open Option
   (* open Context  *)
   exception Error of string
-  let string_buf = Buffer.create 256
+  let string_buff = Buffer.create 1024
 
     let init _filename channel : Lexing.lexbuf = 
         Lexing.from_channel channel
@@ -119,13 +119,13 @@ rule read = parse
   | "defer"  { DEFER }
   | "as"     { AS }
   | "macro"  { MACRO }
-  | "include" { INCLUDE }
+  | "#include" { INCLUDE }
   (* | "volatile"                    { VOLATILE } *)
   | "while"                       { WHILE }
   | digit+ as i { NUMBER_LITERAL (int_of_string i) }
   | identifier as id   { IDENTIFIER id }
   |  "'"  { char lexbuf; char_literal_end lexbuf  ; CHAR_LITERAL (lexeme lexbuf) }
-  | "\""  { string_literal lexbuf ; STRING_LITERAL (lexeme lexbuf)}
+  | '"'   { Buffer.clear string_buff; read_string lexbuf}
   | eof   { EOF }
   | _     { failwith ("Unexpected char: " ^ Lexing.lexeme lexbuf) }
 
@@ -143,7 +143,7 @@ and char_literal_end = parse
 and string_literal = parse
   | '\"'       { }
   | '\n' | eof { failwith "missing terminating '\"' character" }
-  | ""         { char lexbuf; string_literal lexbuf }
+  | _         {  string_literal lexbuf }
 
 (* Multi-line comment terminated by "*/" *)
 and multiline_comment = parse
@@ -157,3 +157,42 @@ and singleline_comment = parse
   | '\n'   { new_line lexbuf }
   | eof    { () }
   | _      { singleline_comment lexbuf }
+
+(* This rule is only entered when we see a double quote *)
+and read_string = parse
+  (* Case 1: Closing Quote -> Return the accumulated string *)
+  | '"' 
+      { 
+        let str = Buffer.contents string_buff in
+        STRING_LITERAL str 
+      }
+
+  (* Case 2: Escape Sequences *)
+  | '\\' '/'  { Buffer.add_char string_buff '/';  read_string lexbuf }
+  | '\\' '\\' { Buffer.add_char string_buff '\\'; read_string lexbuf }
+  | '\\' 'b'  { Buffer.add_char string_buff '\b'; read_string lexbuf }
+  | '\\' 'f'  { Buffer.add_char string_buff '\012'; read_string lexbuf }
+  | '\\' 'n'  { Buffer.add_string string_buff "\\n"; read_string lexbuf }
+  | '\\' 'r'  { Buffer.add_char string_buff '\r'; read_string lexbuf }
+  | '\\' 't'  { Buffer.add_char string_buff '\t'; read_string lexbuf }
+  | '\\' '"'  { Buffer.add_char string_buff '"';  read_string lexbuf }
+  
+  (* Case 3: Regular Characters *)
+  (* Match any char that ISN'T a backslash or a quote *)
+  | [^ '"' '\\']+ as lxm
+      { 
+        Buffer.add_string string_buff lxm;
+        read_string lexbuf 
+      }
+
+  (* Case 4: End of File (Error) *)
+  (* If we hit EOF while inside a string, the user forgot the closing quote *)
+  | eof 
+      { raise (Error "String is not terminated") }
+  
+  (* Case 5: Catch-all for weird chars *)
+  | _ as char
+      { 
+        Buffer.add_char string_buff char;
+        read_string lexbuf 
+      }

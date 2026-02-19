@@ -1,15 +1,9 @@
-(* lib/diagnostic.ml *)
 open Printf
 open Lexing
 
-(* OCaml Concept: 'option'
-   This is like Rust's Option<T>. It can be 'Some value' or 'None'.
-   We use it here because we might not always have a specific range to point to.
-*)
+let current_source = ref ""
 
-(* Helper function: get_line_content
-   Takes the full source code and a line number, and extracts just that line.
-*)
+(* Takes the full source code and a line number, and extracts just that line. *)
 let get_line_content source line_num =
   let lines = String.split_on_char '\n' source in
   (* List.nth returns the Nth element. OCaml lists are 0-indexed, so we sub 1 *)
@@ -17,6 +11,7 @@ let get_line_content source line_num =
     Some (List.nth lines (line_num - 1))
   else
     None
+
 
 (* Main function: print_error
    Arguments:
@@ -66,6 +61,7 @@ type error_kind =
   | Syntax_Error
   | Semantic_Error
   | Internal_Error
+
 
 (* 3. Helper to get color and string prefix *)
 (* OCaml Concept: Pattern Matching
@@ -122,4 +118,71 @@ let print_diagnostic (kind : error_kind) (sev : severity) (msg : string)
     eprintf "    (Context unavailable)\n\n"
   end
 
+let emit_warning msg (pos : Lexing.position) =
+  eprintf "\027[1;33mWarning:\027[0m %s\n" msg;
+  eprintf "   \027[1;34m-->\027[0m %s:%d:%d\n\n" 
+    pos.pos_fname pos.pos_lnum (pos.pos_cnum - pos.pos_bol)
 
+
+(* 1. The Warning Queue *)
+(* Stores tuples of (Message, Position) *)
+let warning_queue : (string * position) list ref = ref []
+
+let add_warning msg pos =
+  warning_queue := (msg, pos) :: !warning_queue
+
+(* 2. Refactored Printer: Takes 'pos' instead of 'lexbuf' *)
+let print_diagnostic (kind : error_kind) (sev : severity) (msg : string) 
+                     (pos : position) (source : string) =
+  
+  let filename = pos.pos_fname in
+  let line = pos.pos_lnum in
+  let col = pos.pos_cnum - pos.pos_bol in
+
+  (* Color Logic *)
+  let (color, level_str) = match sev with
+    | Error   -> ("\027[1;31m", "[Error]")   (* Red *)
+    | Warning -> ("\027[1;33m", "[Warning]") (* Yellow *)
+    | Note    -> ("\027[1;36m", "[Note]")    (* Cyan *)
+  in
+  
+  let kind_str = match kind with
+    | Lexical_Error  -> "Lexical Error"
+    | Syntax_Error   -> "Syntax Error"
+    | Semantic_Error -> "Type Error"
+    | Internal_Error -> "Internal Compiler Error"
+  in
+
+  (* Header *)
+  let res = match sev with 
+  | Error ->  sprintf "%s%s\027[0m[%s]: %s\n" color level_str kind_str msg
+  | Warning ->  sprintf "%s%s\027[0m: %s\n" color level_str msg
+  | Note ->  sprintf "%s%s\027[0m[%s]: %s\n" color level_str kind_str msg
+  in
+  eprintf "%s" res;
+  eprintf "   \027[1;34m-->\027[0m %s:%d:%d\n" filename line col;
+  
+  (* Code Snippet *)
+  let lines = String.split_on_char '\n' source in
+  let line_idx = line - 1 in
+  
+  if line_idx >= 0 && line_idx < List.length lines then begin
+    let line_content = List.nth lines line_idx in
+    
+    eprintf "    \027[1;34m|\027[0m\n";
+    eprintf "\027[1;34m%3d |\027[0m %s\n" line line_content;
+    
+    let pointer = String.make col ' ' ^ "\027[1;33m^\027[0m" in (* Yellow pointer for warnings *)
+    eprintf "    \027[1;34m|\027[0m %s\n\n" pointer
+  end else begin
+    eprintf "    (Context unavailable)\n\n"
+  end
+
+(* 3. Flush Function: Prints all queued warnings *)
+let report_all_warnings source =
+  (* The list is in reverse order, so we reverse it back *)
+  List.iter (fun (msg, pos) ->
+    print_diagnostic Syntax_Error Warning msg pos source
+  ) (List.rev !warning_queue);
+  
+  warning_queue := [] (* Clear queue *)

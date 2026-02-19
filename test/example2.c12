@@ -1,0 +1,36 @@
+#include "base" as b;
+#include "cstdio";
+
+struct T;
+
+struct Vec3f { 
+    float x=1;
+    float y=1;
+    float z=1;
+}
+struct Pos { 
+    float x=1;
+    float y=1;
+    float z=1;
+}
+
+
+
+int read_file(char* file_name) {
+    int buffer;
+    //defer { 
+	//	free(buffer); 
+	//}
+	
+    return printf("%s",file_name);
+}
+
+
+
+int main(int argc, char*[] argv) {
+    println("Hello from {}","Amr");
+    read_file("Hello from C from Ocaml\n");
+    
+    Vec3f x = Vec3f{}
+}
+

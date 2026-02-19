@@ -1,6 +1,7 @@
 %{
   open Ast
   open Printf
+  open Lexing
 
     (* Helper to raise it using the current location *)
     let fail_syntax msg start_pos end_pos =
@@ -66,6 +67,12 @@
 program:
     | decls = list(top_level); EOF { decls }
 
+
+
+id_name:
+    | id = IDENTIFIER { id }
+    | AS  { "as" }
+
 (*  --- Top Level Declarations ---  *)
 (*  Function: int add(int x) { ... }  *)
 (*  Function prototype */ *)
@@ -98,10 +105,19 @@ top_level:
   | UNION; name = IDENTIFIER; enum_tag = option(IDENTIFIER) ;LBRACE; variants = separated_list(COMMA, IDENTIFIER); RBRACE 
     { UnionDef(name, enum_tag, variants) }
 
+ | inc = c_include { inc }
+
+normal_include:
   | INCLUDE; include_data = import_path ; alias = option(preceded(AS, IDENTIFIER)); SEMICOLON
     {   
-        let (path, is_wildcard) = include_data in
-        Include(path, alias, is_wildcard)
+        (* let (path, is_wildcard) = include_data in *)
+        (* Include(path, alias, is_wildcard) *)
+    }
+
+c_include:
+    | INCLUDE; path = STRING_LITERAL ; alias = option(preceded(AS, IDENTIFIER)); SEMICOLON
+    {   
+        Include(path, alias)
     }
 
 
@@ -134,7 +150,7 @@ import_path:
 
 (* /* --- Function Parameters --- */ *)
 param:
-  | t = typ; name = IDENTIFIER { { p_type = t; p_name = name } }
+  | t = typ; name = IDENTIFIER; default_v = option(preceded(EQUAL,expr)) { { p_type = t; p_name = name; default_value = default_v } }
 
 (* /* --- Struct Fields --- */ *)
 struct_field:
@@ -215,7 +231,13 @@ typ:
 stmt:
   (*  Variable Declaration: int x = 5;  *)
   | ty = typ; name = IDENTIFIER; init = option(preceded(EQUAL, expr)); SEMICOLON
-    { Decl(ty, name, init) }
+    { 
+        if ty = TVoid then 
+            let msg = sprintf "illegal void type usage" in 
+            fail_syntax msg $startpos $endpos
+        else 
+            Decl(ty, name, init) 
+    }
 
   | LET; name = IDENTIFIER; init = preceded(EQUAL, expr); SEMICOLON
     { Let(name, init) }
@@ -226,20 +248,18 @@ stmt:
   | AUTO; name = IDENTIFIER; init = preceded(EQUAL, expr); SEMICOLON
     { Auto(name, init) }
 
-  | e1 = expr; EQUAL; e2 = expr; SEMICOLON
-    { Assign(e1, e2) }
-  
-  | e1 = expr; ADD_ASSIGN; e2 = expr { Assign_Add(e1,e2)}
-  | e1 = expr; SUB_ASSIGN; e2 = expr { Assign_Sub(e1,e2)}
-  | e1 = expr; MUL_ASSIGN; e2 = expr { Assign_Mul(e1,e2)}
-  | e1 = expr; DIV_ASSIGN; e2 = expr { Assign_Div(e1,e2)}
-  | e1 = expr; MOD_ASSIGN; e2 = expr { Assign_Mod(e1,e2)}
-  | e1 = expr; OR_ASSIGN; e2 = expr { Assign_Or(e1,e2)}
-  | e1 = expr; XOR_ASSIGN; e2 = expr { Assign_Xor(e1,e2)}
-  | e1 = expr; SHL_ASSIGN; e2 = expr { Assign_Shl(e1,e2)}
-  | e1 = expr; SHR_ASSIGN; e2 = expr { Assign_Shr(e1,e2)}
-  | e = expr; SEMICOLON
-    { Expr(e) }
+  | e1 = expr; EQUAL; e2 = expr; SEMICOLON { Assign(e1,Eq, e2) }
+  | e1 = expr; PLUS; EQUAL; e2 = expr { Assign(e1,Add,e2)}
+  | e1 = expr; MINUS; EQUAL; e2 = expr { Assign(e1,Sub,e2)}
+  | e1 = expr; MUL; EQUAL; e2 = expr { Assign(e1,Mul,e2)}
+  | e1 = expr; DIV; EQUAL; e2 = expr { Assign(e1,Div,e2)}
+  | e1 = expr; MOD; EQUAL; e2 = expr { Assign(e1,Mod,e2)}
+  | e1 = expr; PIPE;  EQUAL; e2 = expr { Assign(e1,Bit_Or,e2)}
+  | e1 = expr; AMPERSAND;  EQUAL; e2 = expr { Assign(e1,Bit_And,e2)}
+  | e1 = expr; CARET; EQUAL; e2 = expr { Assign(e1,Bit_Xor,e2)}
+  | e1 = expr; SHL; EQUAL; e2 = expr { Assign(e1,Shl,e2)}
+  | e1 = expr; SHR; EQUAL; e2 = expr { Assign(e1,Shr,e2)}
+  | e = expr; SEMICOLON { Expr(e) }
 
   | b = block_stmt { b }
 
@@ -255,8 +275,18 @@ stmt:
   | DEFER; s = stmt
     { Defer s }
     
-  | SWITCH; LPAREN; e = expr; RPAREN; LBRACE; cases = list(switch_case); default = option(switch_default); RBRACE
-    { Expr(Switch(e, cases, default)) } /* Wrapped in Expr for now, strictly it's an expr in our AST */
+  | DEFER; s = block_stmt
+    { Defer s }
+  
+  | DEFER; s = block_stmt; sem = SEMICOLON
+    {  
+        let msg = sprintf "Unnecessary semiclon after defer block" in 
+        Diagnostic.add_warning msg $startpos(sem) ;
+        Defer(s)
+    }
+  
+  | SWITCH;  e = expr;  LBRACE; cases = list(switch_case); default = option(switch_default); RBRACE
+    { Expr(Switch(e, cases, default)) } (* Wrapped in Expr for now, strictly it's an expr in our AST *)
 
 block_stmt:
   | LBRACE; stmts = list(stmt); RBRACE { Block stmts }
@@ -280,6 +310,9 @@ ident_expr:
   | e = expr; DOT; field = IDENTIFIER   { Member(e, field) }
 
 
+struct_init_field:
+    | id = option(preceded(DOT,IDENTIFIER)); EQUAL; e = expr { (id, e) } 
+  
   (* /* Binary Ops */ *)
   (* /* Function Call: foo(1, 2) */ *)
   (*  Access: obj.field or obj->field  *)
@@ -287,26 +320,47 @@ ident_expr:
   (*  Sizeof  *)
 expr:
   | LPAREN; e = expr; RPAREN { e }
+  
   | i = NUMBER_LITERAL     { NumberLiteral i }
+  
   | s = STRING_LITERAL  { StringLiteral s }
+  
   | c = CHAR_LITERAL { CharLiteral c}
+  
   | TRUE            { BoolLiteral true }
+  
   | FALSE           { BoolLiteral false }
+  
   | NULL            { Null }
+  
   | name = IDENTIFIER    { Identifier name } 
+  
   | e1 = expr; PLUS;  e2 = expr { BinOp(e1, Add, e2) }
+  
   | e1 = expr; MINUS; e2 = expr { BinOp(e1, Sub, e2) }
+  
   | e1 = expr; MUL; e2 = expr { BinOp(e1, Mul, e2) }
+  
   | e1 = expr; DIV;   e2 = expr { BinOp(e1, Div, e2) }
+  
   | e1 = expr; MOD;   e2 = expr { BinOp(e1, Mod, e2) }
+  
   | e1 = expr; LESS_THAN;    e2 = expr { BinOp(e1, Lt, e2) }
+  
   | e1 = expr; GREATER_THAN;    e2 = expr { BinOp(e1, Gt, e2) }
+  
   | e1 = expr; SHL; e2 = expr { BinOp(e1,Shl,e2)}
+  
   | e1 = expr; SHR; e2 = expr { BinOp(e1,Shr,e2)}
+  
   | e1 = expr; AMPERSAND; e2 = expr { BinOp(e1,Bit_And,e2)}
+  
   | e1 = expr; PIPE; e2 = expr { BinOp(e1,Bit_Or,e2)}
+  
   | TILDE; e1 = expr  { UnaryOp(Bit_Not,e1)}
+  
   | MINUS; e1 = expr;  { UnaryOp(Negation,e1)}
+  
   | AMPERSAND; e1 = expr;  { UnaryOp(Address_Of,e1)}
   
   | MUL; e1 = expr;  { UnaryOp(Deref,e1)}
@@ -315,8 +369,8 @@ expr:
 
   | name = expr; LPAREN; args = separated_list(COMMA, expr); RPAREN
     { Call(name, args) }
-
-  | e = expr; DOT; field = IDENTIFIER   
+    (* A.B.C.D*)
+  | e = expr; DOT; field = IDENTIFIER     
   { Member(e, field) }
 
   | LPAREN; t = typ; RPAREN; e = expr %prec TYPE_CAST
@@ -324,3 +378,6 @@ expr:
     
   | SIZEOF; LPAREN; t = typ; RPAREN { SizeOf t }
 
+  | t = ident_expr; LBRACE ;
+  init_l = separated_list(COMMA,struct_init_field) ;RBRACE ;
+  SEMICOLON { StructInit(t,init_l)}
